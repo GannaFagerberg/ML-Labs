@@ -1,0 +1,1003 @@
+---
+title: "Computer Lab 3 - Unsupervised, semisupervised and active learning"
+subtitle: 'Machine Learning 7.5 credits'
+author: "Martin Hyllienmark, Ganna Fagerberg"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r loading-packages}
+#library(mixtools)
+library("RColorBrewer") # for pretty prettyColors
+library(ggplot2)
+library(caret)
+library(mvtnorm)
+library(RVAideMemoire)
+library(gridExtra)
+library(car)
+library(heplots)
+prettyColors = brewer.pal(12, "Paired")[c(1,2,7,8,3,4,5,6,9,10)];
+options(repr.plot.width = 12, repr.plot.height = 12, repr.plot.res = 100) # plot size
+set.seed(12332)         # set the seed for reproducability
+```
+
+The aim of this lab to explore supervised, unsupervised and semi-supervised learning using 
+Gaussian Mixture models. The data set used here contains measures of body mass and length of
+flippers for 342 penguins. See [this blog post](https://widmann.dev/blog/2020/07/palmerpenguins/)
+for some information, and note that I have excluded 2 penguins due to missing data. The penguins 
+belong to three different species (Adelie, Chinstrap, and Gentoo) which will be used as labels
+for the observations. The code below loads the data and plots it.
+```{r load-penguin-data}
+penguins = read.csv("https://github.com/mattiasvillani/MLcourse/raw/main/Data/PalmerPenguins.csv")
+xmin = min(penguins[,"flipper_length_cm"])
+xmax = max(penguins[,"flipper_length_cm"])
+ymin = min(penguins[,"body_mass_kg"])
+ymax = max(penguins[,"body_mass_kg"])
+plot(penguins[penguins[,"species"]=="Adelie","flipper_length_cm"], 
+     penguins[penguins[,"species"]=="Adelie","body_mass_kg"], 
+     col = prettyColors[2], xlim = c(xmin,xmax), ylim = c(ymin,ymax), pch = 19,
+     xlab = "flipper length (cm)", ylab = "body mass (kg)")  
+points(penguins[penguins[,"species"]=="Gentoo","flipper_length_cm"], 
+       penguins[penguins[,"species"]=="Gentoo","body_mass_kg"], col = prettyColors[4], pch = 19)   
+points(penguins[penguins[,"species"]=="Chinstrap","flipper_length_cm"], 
+       penguins[penguins[,"species"]=="Chinstrap","body_mass_kg"], col = prettyColors[8], pch = 19)   
+```
+
+```{r}
+# Save the original dataset
+df_orig=penguins 
+# Format the variables
+penguins=data.frame(data.matrix(data.frame(unclass(penguins))))
+str(penguins)
+
+```
+
+
+
+
+#### Problem 1 - LDA and QDA
+
+```{r}
+# Estimation of the parameters for LDA and QDA
+
+  # Separate datasets for 3 classes 
+  split_data<-split(penguins,f=penguins$species)
+  c1 <- as.data.frame(split_data[1])
+  c2 <- as.data.frame(split_data[2])
+  c3 <- as.data.frame(split_data[3])
+  
+  # Priors
+  p1<-nrow(c1)/nrow(penguins)
+  p2<-nrow(c2)/nrow(penguins)
+  p3<-nrow(c3)/nrow(penguins)
+
+  # Class means
+  c1.means <- apply(c1[,2:3], 2, mean)
+  c2.means <- apply(c2[,2:3], 2, mean)
+  c3.means <- apply(c3[,2:3], 2, mean)
+  
+  # Class covariance matrices, QDA
+  c1.cov <- cov(c1[,2:3])
+  c2.cov <- cov(c2[,2:3])
+  c3.cov <- cov(c3[,2:3])
+  
+  # QDA: log(determinants) of the class covariance matrices 
+  ldet1 <- determinant(c1.cov, logarithm=TRUE)$modulus[1]
+  ldet2 <- determinant(c2.cov, logarithm=TRUE)$modulus[1]
+  ldet3 <- determinant(c1.cov, logarithm=TRUE)$modulus[1]
+  
+  # LDA: single covariance matrix
+  cov <- ((nrow(c1)-1)*c1.cov+    (nrow(c2)-1)*c2.cov+(nrow(c3)-1)*c3.cov)/((nrow(penguins)-3))
+  
+```
+
+
+
+Note that for the purposes of this lab we have decided not to split the penguins dataset into training and test sets.
+
+
+
+
+##### Supervied learning: QDA
+
+```{r}
+
+# QDA
+
+# Make predictions (on the same dataset!):
+
+dat=penguins[,-1] #dataset without species
+
+predsQDA <- apply(dat, 1, function(x) {
+    
+      d.c1 <- -0.5*ldet1-0.5*t(x-c1.means)%*%solve(c1.cov)%*%(x-c1.means)+log(p1)
+      d.c2 <- -0.5*ldet2-0.5*t(x-c2.means)%*%solve(c2.cov)%*%(x-c2.means)+log(p2)
+      d.c3 <- -0.5*ldet3-0.5*t(x-c3.means)%*%solve(c3.cov)%*%(x-c3.means)+log(p3)
+    
+    if (max(d.c1,d.c2,d.c3)==d.c1){
+      return(1)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c2){
+      return(2)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c3){
+      return(3)
+    }
+  })
+
+# Combine the predictions with the penguins dataset
+df_predsQDA=cbind(penguins, predsQDA)
+#str(df_predsQDA)
+
+
+# Compute the confusion matrix, recall, precision and accuracy
+# Confusion matrix
+conf_matrixQDA=confusionMatrix(as.factor(df_predsQDA[,1]), as.factor(df_predsQDA[,4]));#conf_matrixQDA
+
+# Sensitivity and specificity for three classes:
+conf_matrixQDA$byClass[,1:2]
+
+# Overall accuracy of the model:
+message(paste("Accuracy :", round(conf_matrixQDA$overall['Accuracy'], 2)))
+
+```
+
+
+Overall, the QDA classifier performs worst at predicting class 2. The sensitivity for class 2 is 62% compared to class 1 (77%) and class 3 (93%).
+
+
+```{r}
+
+# Plot the decision boundaries for QDA
+
+# Simulate new data
+reps=100
+
+# Get the range of the two predictor variables
+range <-  sapply(penguins[,2:3], range, na.rm = TRUE)
+
+# Simulate two variables given specified range
+xx <- seq(range[1,1], range[2,1], length.out = reps)  
+yy <- seq(range[1,2], range[2,2], length.out = reps)
+
+# Create a grid of possible combinations of xx and yy values
+df <- as.data.frame(cbind(rep(xx, each=reps), rep(yy, time = reps))) 
+colnames(df) <- colnames(range)
+
+# Make predictions given the new data
+predsQDA_new <- apply(df, 1, function(x) {
+    
+      d.c1 <- -0.5*ldet1-0.5*t(x-c1.means)%*%solve(c1.cov)%*%(x-c1.means)+log(p1)
+      d.c2 <- -0.5*ldet2-0.5*t(x-c2.means)%*%solve(c2.cov)%*%(x-c2.means)+log(p2)
+      d.c3 <- -0.5*ldet3-0.5*t(x-c3.means)%*%solve(c3.cov)%*%(x-c3.means)+log(p3)
+    
+    if (max(d.c1,d.c2,d.c3)==d.c1){
+      return(1)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c2){
+      return(2)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c3){
+      return(3)
+    }
+  })
+
+
+# Get the plot
+z <- matrix(as.integer(predsQDA_new), nrow = reps, byrow = TRUE)
+k=length(unique(penguins[,1]))
+
+plot(penguins[,2:3], col = as.integer(penguins[,1])+1L, pch = as.integer(penguins[,1])+1L, main="Decision boundary: QDA")  
+points(df, col = as.integer(predsQDA_new)+1L, pch = ".")
+
+contour(xx, yy, z, add = TRUE, drawlabels = TRUE,
+lwd = 2, levels = (1:k))
+
+
+```
+
+
+##### Supervied learning: LDA
+
+```{r}
+# LDA
+
+# Make the predictions (on the same dataset!):
+predsLDA <- apply(dat, 1, function(x) {
+    
+      d.c1 <- t(c1.means)%*%solve(cov)%*%x-0.5*t(c1.means)%*%solve(cov)%*%c1.means
+              +log(p1)
+      d.c2 <- t(c2.means)%*%solve(cov)%*%x-0.5*t(c2.means)%*%solve(cov)%*%c2.means
+              +log(p1)
+      d.c3 <- t(c3.means)%*%solve(cov)%*%x-0.5*t(c3.means)%*%solve(cov)%*%c3.means
+              +log(p1)
+    
+    if (max(d.c1,d.c2,d.c3)==d.c1){
+      return(1)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c2){
+      return(2)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c3){
+      return(3)
+    }
+  })
+
+# Combine the predictions with the penguins dataset
+df_predsLDA=cbind(penguins, predsLDA)
+
+# Compute the confusion matrix, recall, precision and accuracy
+
+# Confusion matrix
+conf_matrixLDA=confusionMatrix(as.factor(df_predsLDA[,1]), as.factor(df_predsLDA[,4])); #conf_matrixLDA
+
+# Sensitivity and specificity for three classes:
+conf_matrixLDA$byClass[,1:2]
+
+# Overall accuracy of the model:
+message(paste("Accuracy :", round(conf_matrixLDA$overall['Accuracy'],2)))
+
+```
+
+
+
+The LDA classifier performs worst at predicting at class 2. The sensitivity for class 2 is 49% compared to class 1 (84%) and class 3 (96%). The LDA classifier achieves slightly better sensitivity for class 1 and class 3 compared to QDA (however, at the expense of specificity).
+
+
+```{r}
+
+# Plot the decision boundaries for LDA
+
+# Get the predictions on the simulated data
+predsLDA_new <- apply(df, 1, function(x) {
+    
+      d.c1 <- t(c1.means)%*%solve(cov)%*%x-0.5*t(c1.means)%*%solve(cov)%*%c1.means
+              +log(p1)
+      d.c2 <- t(c2.means)%*%solve(cov)%*%x-0.5*t(c2.means)%*%solve(cov)%*%c2.means
+              +log(p1)
+      d.c3 <- t(c3.means)%*%solve(cov)%*%x-0.5*t(c3.means)%*%solve(cov)%*%c3.means
+              +log(p1)
+    
+    if (max(d.c1,d.c2,d.c3)==d.c1){
+      return(1)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c2){
+      return(2)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c3){
+      return(3)
+    }
+  })
+
+
+# Plot the decision boundaries
+zz <- matrix(as.integer(predsLDA_new), nrow = reps, byrow = TRUE)
+
+plot(penguins[,2:3], col = as.integer(penguins[,1])+1L, pch = as.integer(penguins[,1])+1L, main="Decision boundary: LDA")  
+
+points(df, col = as.integer(predsLDA_new)+1L, pch = ".")
+
+contour(xx, yy, zz, add = TRUE, drawlabels = TRUE,
+lwd = 2, levels = (1:k))
+
+```
+
+
+Are the assumptions in LDA plausible for this dataset?
+
+```{r}
+# Assumption of equal variances
+
+# 1) Check the spread of the data by box plots
+p1=ggplot(penguins,  aes(x=species, y=body_mass_kg, fill=as.factor(species), group=species))+
+    geom_boxplot(alpha = 0.2)
+ 
+p2=ggplot(penguins,  aes(x=species, y=flipper_length_cm, fill=as.factor(species), group=species))+
+    geom_boxplot(alpha = 0.2)
+
+grid.arrange(p1, p2, ncol=2)
+
+```
+
+```{r}
+# Assumption of equal variances
+
+#2) Get the data-concentration ellipses 
+scatterplot( flipper_length_cm ~  body_mass_kg| species, data=penguins,
+        ellipse=TRUE, levels=0.68, smoother=NULL, reg.line=FALSE, grid=FALSE, 
+        legend.coords=list(x=10, y=4.4), col=c("red", "green", "blue"))  
+
+```
+
+
+
+
+Visual examination of the box-plots and data-concentration ellipses indicates that the there may be some violations to the assumption of equal variances across the groups (which is also confirmed by the Box's M test below). This may be the reason of why the QDA classifier outperforms the LDA classifier both in terms of accuracy and in its capacity to predict class 2. 
+
+```{r}
+
+# 3) Conduct a Box's M test to check assumption of homogeneity of the covariance matrices 
+boxM<-boxM(penguins[, 2:3], penguins[, "species"])
+boxM$p.value
+```
+
+
+
+
+
+```{r}
+
+# Assumption of normality
+
+# To check the assumption we first generate data from the multivariate normal distribution with the means and variance matrix as used in the LDA analysis. 
+
+set.seed(123)
+n=1000 #set number of simulated samples for each class
+
+x1 <-as.data.frame( rmvnorm(n = n, mean = c1.means, sigma = cov))
+x1$species=1
+colnames(x1)=c("body_mass_kg", "flipper_length_cm","species" )
+
+x2 <- as.data.frame(rmvnorm(n = n, mean = c2.means, sigma = cov))
+x2$species=2
+colnames(x2)=c("body_mass_kg", "flipper_length_cm","species" )
+
+x3 <- as.data.frame(rmvnorm(n = n, mean = c3.means, sigma = cov))
+x3$species=3
+colnames(x3)=c("body_mass_kg", "flipper_length_cm","species" )
+
+df_mvt=rbind(x1,x2,x3) #combine all the simulated data
+
+
+# Kernel Density Plot
+# We can now overlay the density plot for the simulated and actual data to check whether the assumption of normality holds.
+
+# Density plots for the simulated data
+d1 <- density(df_mvt$flipper_length_cm) # returns the density data
+d2 <- density(df_mvt$body_mass_kg) # returns the density data
+
+# Density plots for the actual data
+d3 <- density(penguins$flipper_length_cm) # returns the density data
+d4 <- density(penguins$body_mass_kg) # returns the density data
+
+# Overlaid plots
+plot(d1, col="red", xlab="Flipper_length_cm",lwd=2.0, lty=3, main="Density plot: simulated vs. actual data")
+lines(d3, col="green")
+legend("topright", legend=c("Simulated", "Actual"),
+       col=c("red", "green"), lty=2:1, cex=0.7)
+
+plot(d2, col="red", xlab="Body_mass_cm", lwd=2.0, lty=3, main="Density plot: simulated vs. actual data")
+lines(d4, col="blue")
+legend("topright", legend=c("Simulated", "Actual"),
+       col=c("red", "blue"), lty=2:1, cex=0.7)
+
+# Multivariate Shapiro-Wilk test for the homogeinity of the variances
+dat1=as.matrix(dat)
+mshapiro.test(dat)
+
+# According to the test, we reject the assumption of multivariate normality of the data (p-value = 0.001096).
+```
+
+
+Visual examination of the plots indicates that there might be some violations to the assumption of multivariate normality of the data
+(especially in the body_mass_kg variable). The multivariate Shapiro-Wilk's test seems to confirm this observation. However, this may not be a problem since the LDA (QDA) classifier is known to be robust to some deviations from the assumption of normality.
+
+
+
+
+#### Problem 2 - Unsupervised GMM
+
+
+Pretend now that the labels of the Penguins are unknown. Use the EM for multivariate GMM code
+on the course web page (under Lecture 9)
+[GMM_EM_Multi.R](https://github.com/mattiasvillani/MLcourse/raw/main/Code/GMM_EM_Multi.R). 
+Use the code to fit a Gaussian mixture model to the penguin data for M=1, 2 and 3 mixture components.
+Set reasonable initial values for the EM algorithm (at least take into account the scale of the data).
+
+```{r}
+
+# Function-implementation of the EM algorithm
+
+mixtureMultiGaussianEM <- function(data, M, initMu, initSigma, initPi, tol){
+  
+  # data is a n x p matrix with n observations on p variables.
+  # initMu is an p x M matrix with initial values for the component means
+  # initSigma is an p x p x M 3D array with initial values for the component covariance matrices
+  # initPi is a M-dim vector with initial values for the component probabilities
+
+# Preliminaries
+  count <- 0
+  n <- dim(data)[1]
+  nHat <- rep(0,M)
+  W = matrix(0,n,M)  # n x m matrix with weights for all observations and components
+  Mu = initMu        
+  Sigma = initSigma
+  Pi = initPi
+  unitVect = rep(1,n) # Just a vector of ones that we need later for efficiency
+  
+  LogLOld <- 10^10
+  LogLDiff <- 10^10
+  
+  while (LogLDiff > tol){
+    count <- count + 1
+    
+# E-step
+    for (m in 1:M){
+      W[,m] = Pi[m]*dmvnorm(data, Mu[,m], Sigma[,,m])
+    }
+    sum_w <- rowSums(W)
+    for (m in 1:M){
+      W[,m] = W[,m]/sum_w
+    }
+    
+# M-step
+    for (m in 1:M){
+      nHat[m] <- sum(W[,m])
+      Mu[,m] = (1/nHat[m])*crossprod(W[,m],data)
+      Res = data - tcrossprod(unitVect,Mu[,m])
+      Sigma[,,m] = (1/nHat[m])*t(Res)%*%diag(W[,m])%*%Res 
+      #Matrix version of the estimate in the slides
+      Pi[m] = nHat[m]/n
+    }
+    
+# Log-Likelihood computation - to check convergence
+    for (m in 1:M){
+      W[,m] = Pi[m]*dmvnorm(data, Mu[,m], Sigma[,,m])
+    }
+    LogL = sum(log(rowSums(W)))
+    LogLDiff = abs(LogL - LogLOld)
+    LogLOld = LogL
+    
+  }
+  
+  return(list(Mu = Mu, Sigma = Sigma, Pi = Pi, LogL = LogL, nIter = count))
+}
+
+```
+
+```{r}
+# For M=3
+# Set the initial values
+
+# Estimation of the initial parameters with k-means
+data=as.matrix(dat)
+
+k3 <- kmeans(data, centers = 3, nstart = 1)
+
+# Initial mu
+initMu=as.matrix(t(k3$centers)) 
+
+# Iniatial mixing probabilities
+initPi=as.vector(k3$size/nrow(data))
+
+# Initial cov matrix
+initSigma = array(NA,c(2,2,3))
+
+cov_data=cov(data)
+
+initSigma[,,1] = cov_data
+initSigma[,,2] = cov_data
+initSigma[,,3] = cov_data
+
+# Run the EM algorithm
+M <- 3
+EMfit3 <- mixtureMultiGaussianEM(data, M, initMu, initSigma, initPi, tol = 0.0000001)
+
+# Classification results
+EMfit3$Mu
+EMfit3$Sigma
+EMfit3$Pi
+EMfit3$LogL
+```
+
+
+```{r}
+
+# Make predictions by using the QDA classifier 
+
+preds_unsl <- apply(data, 1, function(x) {
+   
+  ldet1 <- determinant(EMfit3$Sigma[,,1], logarithm=TRUE)$modulus[1]
+  ldet2 <- determinant(EMfit3$Sigma[,,2], logarithm=TRUE)$modulus[1]
+  ldet3 <- determinant(EMfit3$Sigma[,,3], logarithm=TRUE)$modulus[1]
+   
+      d.c1 <- -0.5*ldet1-0.5*t(x-EMfit3$Mu[,1])%*%solve(EMfit3$Sigma[,,1])%*%(x-EMfit3$Mu[,1])+log(EMfit3$Pi[1])
+      d.c2 <- -0.5*ldet2-0.5*t(x-EMfit3$Mu[,2])%*%solve(EMfit3$Sigma[,,2])%*%(x-EMfit3$Mu[,2])+log(EMfit3$Pi[2])
+      d.c3 <- -0.5*ldet3-0.5*t(x-EMfit3$Mu[,3])%*%solve(EMfit3$Sigma[,,3])%*%(x-EMfit3$Mu[,3])+log(EMfit3$Pi[3])
+    
+    if (max(d.c1,d.c2,d.c3)==d.c1){
+      return(1)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c2){
+      return(2)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c3){
+      return(3)
+    }
+  })
+ 
+# Confusion matrix
+conf_matrixUNSL=confusionMatrix(as.factor(penguins[,1]), as.factor(preds_unsl))
+#conf_matrixUNSL
+
+# Sensitivity and specificity for three classes:
+conf_matrixUNSL$byClass[,1:2]
+
+# Overall accuracy of the model:
+message(paste("Accuracy :", round(conf_matrixUNSL$overall['Accuracy'],2)))
+```
+
+
+Since the unsupervised learning algorithm is exploratory in character, we investigate its behavior given M=2 and M=1
+
+```{r}
+# For M=2
+
+# Set the initial values
+# Estimation of the initial parameters with k-means
+
+k2 <- kmeans(data, centers = 2, nstart = 1)
+
+# Initial mu
+initMu2=as.matrix(t(k2$centers)) 
+
+# Initial mixing probabilities
+initPi2=as.vector(k2$size/nrow(data))
+
+# Initial cov matrix
+initSigma2 = array(NA,c(2,2,2))
+
+cov_data=cov(data)
+
+initSigma2[,,1] = cov_data
+initSigma2[,,2] = cov_data
+
+
+# Run the EM algorithm
+M <- 2
+EMfit2 <- mixtureMultiGaussianEM(data, M, initMu2, initSigma2, initPi2, tol = 0.0000001)
+
+# Classification results
+EMfit2$Mu
+EMfit2$Sigma
+EMfit2$Pi
+EMfit2$LogL
+```
+
+```{r}
+# Comparison of the models with M=3 and M=2: 
+
+comp=cbind(EMfit3$LogL,EMfit2$LogL)
+colnames(comp)=c("M3", "M2"); comp
+
+# The model with M=3 seems to provide a better fit, as it results in a higher log likelihood.
+```
+
+```{r}
+
+# Initial mu
+initMu1 <- apply(data, 2, mean)
+initMu1
+
+# Initial cov matrix
+cov_data=cov(data)
+cov_data
+
+```
+
+
+
+
+
+#### Problem 3 - Semi-supervised GMM
+Pretend now that the label for every odd observation in the dataset is known,
+but the label for every even observation is unknown. Modify the
+[GMM_EM.R](https://github.com/mattiasvillani/MLcourse/raw/main/Code/GMM_EM_Multi.R) code to semi-supervised GMM; the function mixtureMultiGaussianEM should have an additional argument which contains a vector of labels (NA for unknown labels). Analyze the penguin data using a semi-supervised 
+Gaussian mixture model with three mixture components.
+
+```{r}
+# Prepare the dataset
+index=seq(1:nrow(penguins))
+df=cbind(index, penguins)
+df=transform(df, label=ifelse(index%%2==0, 0, species))
+df=df[order(df$label),]
+label_vect=df$label
+df_x=as.matrix(df[,-c(1,2,5)])
+```
+
+```{r}
+
+# Estimation of the parameters on the labelled set
+
+  # Split the dataset: labeled and unlabelled
+  split_data<-split(df,f=df$label)
+  set0 <- as.data.frame(split_data[1]) # unlabeled
+  c1 <- as.data.frame(split_data[2]) # labeled
+  c2 <- as.data.frame(split_data[3])
+  c3 <- as.data.frame(split_data[4])
+  #colnames(set1) <- c("index","species","body_mass_kg", "flipper_length_cm","label")
+  
+  # Esimation of the initial parameters
+  # Priors
+  p1<-nrow(c1)/nrow(df);p1
+  p2<-nrow(c2)/nrow(df);p2
+  p3<-nrow(c3)/nrow(df);p3
+  initPi=c(p1, p2,p3)
+
+  # Class means
+  c1.means <- apply(c1[,3:4], 2, mean)
+  c2.means <- apply(c2[,3:4], 2, mean)
+  c3.means <- apply(c3[,3:4], 2, mean)
+  initMu=as.matrix(data.frame(cbind(c1.means,c2.means,c3.means))) 
+  
+  
+  # Class covariance matrices, QDA
+  c1.cov <- cov(c1[,3:4])
+  c2.cov <- cov(c2[,3:4])
+  c3.cov <- cov(c3[,3:4])
+  
+  initSigma = array(NA,c(2,2,3))
+  initSigma[,,1] = c1.cov
+  initSigma[,,2] = c2.cov 
+  initSigma[,,3] = c3.cov
+
+```
+ 
+```{r}
+
+# Function-implementation of the EM algorithm
+
+mixtureMultiGaussianEM_semi <- function(data, M, initMu, initSigma, initPi, vector, tol){
+  
+# Preliminaries
+  count <- 0
+  n <- dim(data)[1]
+  nHat <- rep(0,M)
+  W = matrix(0,n,M)  # n x m matrix with weights for all observations and components
+  Mu = initMu        
+  Sigma = initSigma
+  Pi = initPi
+  unitVect = rep(1,n) # Just a vector of ones that we need later for efficiency
+  
+  LogLOld <- 10^10
+  LogLDiff <- 10^10
+  
+  while (LogLDiff > tol){
+    count <- count + 1
+    
+# E-step
+  for (i in 1:length(label_vect))
+  {
+  for (m in 1:M)
+    {
+    if (label_vect[i]==0) {
+      W[i,m] = Pi[m]*dmvnorm(df_x[i,], Mu[,m], Sigma[,,m])
+    }
+     else if (label_vect[i]==m) {
+      W[i,m] = 1
+     }
+      else {
+      W[i,m] = 0
+    }
+  }
+}
+    sum_w <- rowSums(W)
+    for (m in 1:M){
+      W[,m] = W[,m]/sum_w
+    }
+    
+# M-step
+    for (m in 1:M){
+      nHat[m] <- sum(W[,m])
+      Mu[,m] = (1/nHat[m])*crossprod(W[,m],data)
+      Res = data - tcrossprod(unitVect,Mu[,m])
+      Sigma[,,m] = (1/nHat[m])*t(Res)%*%diag(W[,m])%*%Res 
+      #Matrix version of the estimate in the slides
+      Pi[m] = nHat[m]/n
+    }
+    
+# Log-Likelihood computation - to check convergence
+    for (m in 1:M){
+      W[,m] = Pi[m]*dmvnorm(data, Mu[,m], Sigma[,,m])
+    }
+    LogL = sum(log(rowSums(W)))
+    LogLDiff = abs(LogL - LogLOld)
+    LogLOld = LogL
+    
+  }
+  
+  return(list(Mu = Mu, Sigma = Sigma, Pi = Pi, LogL = LogL, nIter = count))
+  }
+
+```
+
+
+```{r}
+M <- 3
+EMfit_semi <- mixtureMultiGaussianEM_semi(df_x, M, initMu, initSigma, initPi, label_vect, tol = 0.0000001)
+
+# Get the results
+EMfit_semi$Mu
+EMfit_semi$Sigma
+EMfit_semi$Pi
+```
+
+```{r}
+
+# Make predictions by using QDA
+ preds_semi <- apply(df_x, 1, function(x) {
+   
+  ldet1 <- determinant(EMfit_semi$Sigma[,,1], logarithm=TRUE)$modulus[1]
+  ldet2 <- determinant(EMfit_semi$Sigma[,,2], logarithm=TRUE)$modulus[1]
+  ldet3 <- determinant(EMfit_semi$Sigma[,,3], logarithm=TRUE)$modulus[1]
+   
+      d.c1 <- -0.5*ldet1-0.5*t(x-EMfit_semi$Mu[,1])%*%solve(EMfit_semi$Sigma[,,1])%*%(x-EMfit_semi$Mu[,1])+log(EMfit_semi$Pi[1])
+      d.c2 <- -0.5*ldet2-0.5*t(x-EMfit_semi$Mu[,2])%*%solve(EMfit_semi$Sigma[,,2])%*%(x-EMfit_semi$Mu[,2])+log(EMfit_semi$Pi[2])
+      d.c3 <- -0.5*ldet3-0.5*t(x-EMfit_semi$Mu[,3])%*%solve(EMfit_semi$Sigma[,,3])%*%(x-EMfit_semi$Mu[,3])+log(EMfit_semi$Pi[3])
+    
+    if (max(d.c1,d.c2,d.c3)==d.c1){
+      return(1)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c2){
+      return(2)
+    }
+    if (max(d.c1,d.c2,d.c3)==d.c3){
+      return(3)
+    }
+  })
+ 
+# Confusion matrix
+conf_matrixSEMI=confusionMatrix(as.factor(df[,2]), as.factor(preds_semi))
+#conf_matrixSEMI
+
+# Sensitivity and specificity for three classes:
+conf_matrixSEMI$byClass[,1:2]
+
+# Overall accuracy of the model:
+message(paste("Accuracy :", round(conf_matrixSEMI$overall['Accuracy'],2)))
+
+```
+
+
+
+
+#### Problem 4 - Active learning - logistic regression
+Use the Penguin data with the two species "Adelie" and "Chinstrap", only. Pretend then for the beginning that the species (labels) are not known, but keep this information such that the oracle can label queried data points later. 
+Choose randomly 15 data points and label them. Run then active learning to query additional 45 data points based on a logistic regression model. Use both uncertainty sampling and variance reduction with an E-optimal design. 
+Plot the labeled dataset after 60 labeled observations and compare between uncertainty sampling and E-optimality. Report the parameter estimates or the decision boundaries.
+
+
+```{r}
+# Keep "Adelie" and "Chinstrap" only
+df_new = df_orig[df_orig$species != "Gentoo", ]
+df_new=transform(df_new, label=ifelse(species=="Adelie", 0, 1)) 
+levels(df_new$label) <- c("Adelie","Chinstrap")
+#str(df_new)
+df_new=df_new[,-1]
+
+init=15 # set number of initially known labels
+end=60 # set max number of labelled data
+```
+
+
+
+
+Decision boundary based on all the data (labelled) - true decision boundary
+```{r}
+# Fit the logistic regression to the data
+glm_all = glm(label ~ ., data = df_new, family = binomial(logit))
+coef(glm_all)
+```
+
+```{r}
+# Plot the true decision boundary  
+slope = coef(glm_all)[3]/(-coef(glm_all)[2]) #slope of the decision boundary
+intercept = coef(glm_all)[1]/(-coef(glm_all)[2]) #intercept of the decision boundary
+
+p1=ggplot(df_new, aes(x=flipper_length_cm, y=body_mass_kg, 
+                       shape=as.factor(label), color=as.factor(label))) + geom_point() + geom_abline(slope = slope, intercept = intercept) +
+ggtitle("Logistic Regression on fully labelled data"); p1
+
+slope_true = slope
+intercept_true = intercept
+
+```
+
+
+Keep 15 labeled data points (chosen randomly)
+```{r}
+# Shuffle the dataframe by rows
+set.seed(1979)
+shuffled_df= df_new[sample(1:nrow(df_new)), ]
+y_true=shuffled_df$label #true vector with all the labels
+labs =rep(NA, nrow(shuffled_df)) #vector to hold known and learned labels
+
+# Choose 15 labelled points randomly
+sample15 = sample(seq_len(nrow(shuffled_df)), size = init) #sample randomly 15 pts 
+labs[sample15]=y_true[sample15]
+table(labs) #sanity check
+```
+
+```{r}
+# Update the shuffled_df
+shuffled_df=cbind(labs, shuffled_df) 
+# Design matrix for all x-data (for the variance reduction method)
+X0 <- cbind(rep(1, nrow(shuffled_df)), shuffled_df[, -c(1,4)])
+X0 <- as.matrix(X0)
+
+```
+
+
+
+
+Initial Learning: on 15 labeled data points
+```{r}
+glm_15 = glm(labs ~ shuffled_df[, 2] + shuffled_df[, 3], family = binomial(logit))
+coef(glm_15)
+```
+
+
+
+
+Plot of the decision boundary learned from 15 labelled data points
+```{r}
+slope_15 = coef(glm_15)[3]/(-coef(glm_15)[2])
+intercept_15 = coef(glm_15)[1]/(-coef(glm_15)[2]) 
+p2=ggplot() + 
+  geom_point(data = df_new, aes(flipper_length_cm, body_mass_kg,shape=factor(label), colour=factor(label))) +
+  geom_abline(slope = slope_15, intercept = intercept_15) + 
+  geom_point(data = shuffled_df[,-4], aes(x=flipper_length_cm, y=body_mass_kg, shape=as.factor(labs))) + 
+  ggtitle("Initial Learning: 15 labeled observations") + 
+  geom_abline(slope = slope_true, intercept = intercept_true, 
+              linetype = "dashed", color = "red"); p2
+
+# Note that the red dotted line is the true decision boundary, i.e., based on all labelled observations. The black solid line is the decision boundary estimated from the 15 labelled samples only. The black dots are 15 known observations.
+```
+The decision boundary based on only 15 labeled observations deviates markedly from the true decision boundary.
+
+
+
+
+Active Learning: Uncertainty Sampling and Variance reduction with E-optimality
+
+```{r}
+# Function to sample queries with the uncertainty and variance reduction methods
+oracle = function(init,end,labs,X0,y_true, querys="D"){
+  accdev <- NULL
+# sequential labeling
+for (i in (init+1):end){ 
+  # Maximum Likelihood Estimate in logistic regression 
+  lgm   <- glm(labs ~ X0[, 2] + X0[, 3], family="binomial")
+  beta  <- summary(lgm)$coef[, 1]
+  
+  # compute predictions for all data points
+  predic  <- 1/(1+exp(-beta[1]-beta[2]*X0[, 2]-beta[3]*X0[, 3]))
+  # compute accuracy
+  accura  <- 1-mean(abs((predic>0.5)-y_true))
+  accdev  <- cbind(accdev, c(i-1, accura))
+  if (querys=="U"){
+    uncert  <- abs(predic-0.5)
+    uncert[!is.na(labs)] <- NA
+    # determine index of data point to be queried
+    index   <- which.min(uncert)
+  }
+  if (querys=="D"){
+    
+    XL   <- X0[!is.na(labs), ] # XL is design matrix for labeled data;
+    G0   <- 1/(1+exp(-X0 %*% beta)) #predictions
+   
+    V0   <- G0 * (1-G0) #the variance
+    
+    VL   <- V0[!is.na(labs)] # VL is diagonal of W-matrix for labeled data
+    
+    crit <- rep(NA, nrow(X0))
+    
+    for (j in 1:nrow(X0)){
+      if (is.na(labs[j])){
+        # X is design matrix XL plus an additional unlabeled data point j; V accordingly
+        X    <- rbind(XL, X0[j, ])
+        V    <- c(VL, V0[j]) 
+        # Information matrix if x_j is added and E-criterion
+        Infj <- t(X) %*% diag(V) %*% X
+        InfjInv<-solve(Infj)
+        crit[j] <-  max(eigen(InfjInv)$values)
+      }
+    }
+    # determine index of data point to be queried
+    index <- which.min(crit)
+  }
+  # oracle labels the queried data point
+  labs[index] <- y_true[index]
+}
+  return(list(label=labs, accuracy=accura, accdev=accdev))
+  
+}
+
+```
+
+
+Uncertainty sampling
+```{r}
+# Sample 45 additional points
+un_sampl=oracle(init,end,labs,X0, y_true, querys="U")
+labels_unc=as.vector(unlist(un_sampl[1]))
+table(labels_unc)
+```
+
+Variance reduction with E-optimality 
+```{r}
+var_sampl=oracle(init,end,labs,X0, y_true, querys="D")
+labels_var=as.vector(unlist(var_sampl[1]))
+table(labels_var)
+```
+
+```{r}
+# Update shuffled_df
+shuffled_df=cbind(shuffled_df, labels_unc, labels_var)
+```
+
+
+
+Comparison of the two methods: active learning with the uncertainty sampling and variance reduction methods with E-optimality
+
+```{r}
+# Active learning: 60 labelled observations (obtained with the uncertainty sampling)
+glm_unc = glm(labels_unc ~ shuffled_df[, 2] + shuffled_df[, 3], family = binomial(logit))
+coef(glm_unc)
+```
+
+```{r}
+# Active learning: 60 labelled observations (obtained withthe variance reduction method)
+glm_var = glm(labels_var ~ shuffled_df[, 2] + shuffled_df[, 3], family = binomial(logit))
+coef(glm_var)
+```
+
+
+
+Decision boundaries produced by the two methods
+```{r}
+# Decision boundary for the uncertainty sampling method
+slope_unc = coef(glm_unc)[3]/(-coef(glm_unc)[2])
+intercept_unc = coef(glm_unc)[1]/(-coef(glm_unc)[2]) 
+
+p3=ggplot() + 
+  geom_point(data = df_new, aes(x=flipper_length_cm, y=body_mass_kg,shape=factor(label), colour=factor(label))) +
+  
+  geom_abline(slope = slope_unc, intercept = intercept_unc) + 
+  
+  geom_point(data = shuffled_df, aes(x=flipper_length_cm, y=body_mass_kg, shape=as.factor(labels_unc))) + 
+  ggtitle("Active learning: uncertaunty sampling") + 
+  geom_abline(slope = slope_true, intercept = intercept_true, 
+              linetype = "dashed", color = "red")
+```
+
+```{r}
+# Decision boundary for the variance reduction method
+slope_var = coef(glm_var)[3]/(-coef(glm_var)[2])
+intercept_var = coef(glm_var)[1]/(-coef(glm_var)[2])
+
+p4=ggplot() + 
+  geom_point(data = df_new, aes(x=flipper_length_cm, y=body_mass_kg,shape=factor(label), colour=factor(label))) +
+  
+  geom_abline(slope = slope_var, intercept = intercept_var) + 
+  
+  geom_point(data = shuffled_df, aes(x=flipper_length_cm, y=body_mass_kg, shape=as.factor(labels_var))) + 
+  ggtitle("Active learning: variance reduction with E-optimality") + 
+  geom_abline(slope = slope_true, intercept = intercept_true, 
+              linetype = "dashed", color = "red")
+```
+
+```{r}
+p3
+p4
+
+# Comment: Note that the true decision boundary is the red dotted line. The black dots are the labelled sample points (60 in total in each plot). All other sample points are assumed to be unlabelled.
+```
+
+The decision boundary obtained by the variance reduction method seems to be closer to the true true decision boundary than the one obtained by the uncertainty method.
