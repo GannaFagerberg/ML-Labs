@@ -1,0 +1,708 @@
+---
+title: "Computer Lab 2 - Deep learning and Gaussian processes"
+subtitle: 'Machine Learning 7.5 credits'
+author: "Martin Hyllienmark, Ganna Fagerberg"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: 
+    latex_engine: xelatex
+---
+ 
+# Intro1 - Loading packages and data
+
+Loading some packages first. Do `install.packages()` for each package the first time you use a new package.
+
+```{r loading-packages}
+library(keras) # Package for data transformations and tables
+library(caret) # For some useful tools like the confusion matrix function
+library(MLeval) # for plotting ROC curves and more
+library("RColorBrewer") # for pretty colors
+library(mvtnorm)
+colors = brewer.pal(12, "Paired")[c(1,2,7,8,3,4,5,6,9,10)];
+options(repr.plot.width = 12, repr.plot.height = 12, repr.plot.res = 100) # plot size
+set.seed(12332)         # set the seed for reproducability
+```
+
+#### Problem 1 - Fit a logistic regression to MNIST using keras
+
+The first part of this lab is concerned with predicting hand-written images using the famous MNIST data consisting of 60000 handwritten 28 x 28 pixel grayscale images with labels for training and another 10000 labeled images for testing. Let's load the data and set up training and test datasets:
+
+```{r}
+mnist <- dataset_mnist()  # Load the MNIST data
+x_train <- mnist$train$x  # Set up training and test images with labels
+y_train <- mnist$train$y
+x_test <- mnist$test$x
+y_test <- mnist$test$y
+x_train <- array_reshape(x_train, c(nrow(x_train), 784)) # flatten images matrices to vectors
+x_test <- array_reshape(x_test, c(nrow(x_test), 784))
+x_train <- x_train / 255 # rescale grayscale intensities from 0-255 to interval [0,1]
+x_test <- x_test / 255
+
+# One-hot versions of the labels (0-9)
+y_train <- to_categorical(y_train, 10) # 60000-by-10 matrix, each row is one-hot
+y_testOrig <- y_test # Keep the original 0-9 coded test labels.
+y_test <- to_categorical(y_test, 10)
+
+```
+
+Use the `keras` package to fit a simple (linear) logistic regression to the training data. Use the cross entropy loss, the `rmsprop` optimizer, 30 epochs, batchsize 128, and monitor performance using accuracy on 20% of the data used for validation in the fitting. 
+
+Is the model underfitting or overfitting?
+
+```{r}
+
+model <- keras_model_sequential() %>% 
+  layer_flatten(input_shape = c(784)) %>% 
+  layer_dense(units =10, activation = "softmax")
+
+model %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = "RMSprop",
+    metrics = "accuracy"
+  )
+
+history <-model %>% 
+  fit(
+    x_train, y_train,
+    epochs = 30, batch_size = 128,
+    validation_split = 0.2
+  ) 
+
+plot(history)
+
+
+```
+```{r}
+
+# Test Performance
+score <- model %>% evaluate(x_test, y_test)
+
+cat('Test loss:', round((score[1]),4), "\n")
+cat('Test accuracy:', score[2], "\n")
+
+# Is the model over or under-fitting?
+# The model seems to stop improving after appr. epoch 7, in the sense that the training error has stabilized and not diminishing. It may indicate that the model is underfitting.
+
+```
+
+Use the `MLeval` package to compute the confusion matrix for the test data. 
+Which digits is most frequently wrongly predicted to be a 2?
+
+
+```{r}
+
+# Predictions on the test data
+yProbs <- model %>% predict(x_test)
+yPreds = apply(yProbs, 1, function(x) which.max(x)-1)
+#yPreds
+
+# Confusion matrix
+yPreds=as.factor(yPreds)
+y_testOrig=as.factor(y_testOrig)
+confusionMatrix(yPreds, y_testOrig)
+```
+The two digits most frequently predicted as 2 are 3 and 7.
+
+```{r}
+# Alt. 2
+indexPred_2=which(yPreds==2) #vector with all observations predicted as 2
+
+actual_resp=as.vector(y_testOrig[indexPred_2]) #matching predicted 2 with the actual predictions
+
+x=table(actual_resp);x
+x=as.matrix(x)
+x =x[-3,]
+
+barplot(x, col = "blue",
+        main="Wrongly predicted as 2",
+        xlab="Actual observations",
+        ylab="Count",
+        ylim=c(0,25),
+        density=10)
+
+```
+
+#### Problem 2 - Fit models with hidden layers to MNIST
+
+Add hidden layers now to the model in Problem 1. Fit and compute the accuracy on the test data for the following 4 models:
+
+- Model with 1 hidden layer with 16 hidden units.
+- Model with 1 hidden layer with 128 hidden units.
+- Model with 3 hidden layer with 16 hidden units.
+- Model with 3 hidden layer with 128 hidden units.
+
+Let all layers hidden layers have `relu` activation functions and use the same settings as in the logistic regression in Problem 1 when fitting the models.
+
+Which seems be the most important: deep models with many layers, or models with many hidden units in the layers?
+
+
+## Model 1
+```{r}
+
+model_1 <- keras_model_sequential() %>% 
+  layer_flatten(input_shape = c(784)) %>% 
+  layer_dense(units = 16, activation = 'relu') %>% 
+  layer_dense(units =10, activation = "softmax")
+
+
+model_1 %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = "rmsprop",
+    metrics = "accuracy"
+  )
+
+history_1 <- model_1 %>% 
+  fit(
+    x_train, y_train,
+    epochs = 30, batch_size = 128,
+    validation_split = 0.2
+  ) 
+plot(history_1)
+
+
+```
+
+
+```{r}
+
+# Test Performance
+score_1 <- model_1 %>% evaluate(x_test, y_test)
+score_1_loss=round((score_1[1]),4)
+score_1_acc=round((score_1[2]),4)
+
+cat('Test loss:', round((score_1[1]),4), "\n")
+cat('Test accuracy:', score_1[2], "\n")
+
+```
+
+
+
+## Model 2
+```{r model-2}
+
+model_2 <- keras_model_sequential() %>% 
+  layer_flatten(input_shape = c(784)) %>% 
+  layer_dense(units = 128, activation = "relu") %>% 
+  layer_dense(units =10, activation = "softmax")
+
+model_2 %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = "rmsprop",
+    metrics = "accuracy"
+  )
+
+history_2 <- model_2 %>% 
+  fit(
+    x_train, y_train,
+    epochs = 30, batch_size = 128,
+    validation_split = 0.2
+  ) 
+
+plot(history_2)
+
+
+```
+
+```{r}
+
+# Test Performance
+score_2 <- model_2 %>% evaluate(x_test, y_test)
+
+score_2_loss=round((score_2[1]),4)
+score_2_acc=round((score_2[2]),4)
+
+cat('Test loss:', round((score_2[1]),4), "\n")
+cat('Test accuracy:', score_2[2], "\n")
+
+```
+
+
+## Model 3
+```{r}
+
+model_3 <- keras_model_sequential() %>% 
+  layer_flatten(input_shape = c(784)) %>% 
+  layer_dense(units = 16, activation = 'relu') %>%
+  layer_dense(units = 16, activation = 'relu') %>%
+  layer_dense(units = 16, activation = 'relu') %>%
+  layer_dense(units =10, activation = "softmax")
+
+model_3 %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = "rmsprop",
+    metrics = "accuracy"
+  )
+
+history_3 <- model_3 %>% 
+  fit(
+    x_train, y_train,
+    epochs = 30, batch_size = 128,
+    validation_split = 0.2
+  ) 
+
+plot(history_3)
+
+
+```
+
+```{r}
+
+# Test Performance
+score_3 <- model_3 %>% evaluate(x_test, y_test)
+
+score_3_loss=round((score_3[1]),4)
+score_3_acc=round((score_3[2]),4)
+
+
+cat('Test loss:', round((score_3[1]),4), "\n")
+cat('Test accuracy:', score_3[2], "\n")
+
+```
+
+## Model 4
+```{r }
+
+model_4 <- keras_model_sequential() %>% 
+  layer_flatten(input_shape = c(784)) %>% 
+  layer_dense(units = 128, activation = 'relu') %>%
+  layer_dense(units = 128, activation = 'relu') %>%
+  layer_dense(units = 128, activation = 'relu') %>%
+  layer_dense(units =10, activation = "softmax")
+
+model_4 %>% 
+  compile(
+    loss = "categorical_crossentropy",
+    optimizer = "rmsprop",
+    metrics = "accuracy"
+  )
+
+history_4 <- model_4 %>% 
+  fit(
+    x_train, y_train,
+    epochs = 30, batch_size = 128,
+    validation_split = 0.2
+  ) 
+
+plot(history_4)
+
+
+```
+
+```{r}
+
+# Test Performance
+score_4 <- model_4 %>% evaluate(x_test, y_test)
+score_4_loss=round((score_4[1]),4)
+score_4_acc=round((score_4[2]),4)
+
+cat('Test loss:', round((score_4[1]),4), "\n")
+cat('Test accuracy:', score_4[2], "\n")
+```
+
+```{r }
+# Create a dataframe with the test metrics in problems 5-8
+
+df_scores = data.frame(
+  Model = c("M1", "M2",  "M3",  "M4"),
+  Test_loss = c(score_1_loss, score_2_loss, score_3_loss, score_4_loss),
+  Test_acc = c(score_1_acc,score_2_acc,score_3_acc,score_4_acc)
+)
+
+df_scores
+
+```
+
+
+
+The models based on 128 neurons in each layer - models 2 and 4 - seem to outperform models 1 and 2 based on 16 neurons in terms of the prediction accuracy. However, the loss and accuracy learning curves for models 2 and 4 clearly indicate that these models overfit the data, producing large generalization gap.Therefore, we may question whether these models will generalize well beyond our data. 
+
+By contrast, Model 1 (1 hidden layer) and model 3 (3 hidden layers) both featuring 16 neurons in each layer, do not seem to overfit the data and therefore may generalize better than models 2 and 4.
+
+It seems that in this case, the number of neurons seems to be more important than the number of layers. 
+
+
+#### Problem 3 - Filtering images
+
+As a pre-cursor to convolutional networks, here is a little exercise on filters and convolutions. Let's load a test image for this problem and plot it using the `image` function.
+
+```{r load-image-filters}
+library(imagine)
+library(pracma)
+ascent = as.matrix(read.table(file = 
+  "https://github.com/mattiasvillani/MLcourse/raw/main/Data/ascent.txt", header = FALSE))
+ascent = t(apply(ascent, 2, rev))
+par(pty="s")
+image(ascent, col = gray.colors(256), axes = F)
+```
+
+Apply the following filters to the image:
+
+- Horizontal 3x3 Sobel edge detector
+- Vertical 3x3 Sobel edge detector
+- 15x15 Gaussian blur with a standard deviation of 3.
+
+Code up the above filter matrices yourself, but you can use the `convolution2D` function from the 
+`imagine` package for the convolution.
+
+```{r }
+# Vertical 3x3 Sobel edge detector
+filter_vert<-matrix(c(1,2,1,0,0,0,-1,-2,-1),3,3)
+filter_vert
+
+conv_vert=convolution2D(ascent, filter_vert)
+
+image(conv_vert, col = gray.colors(256), axes = F)
+
+```
+```{r }
+# Vertical 3x3 Sobel edge detector
+filter_horiz<-matrix(c(1,0,-1,2,0,-2,1,0,-1),3,3)
+filter_horiz
+
+conv_horiz=convolution2D(ascent, filter_horiz)
+
+image(conv_horiz, col = gray.colors(256), axes = F)
+```
+
+```{r}
+# Combining the horizontal and vertical blurs
+#G1=(abs(x_filter)+abs(y_filter))
+G2=((conv_vert)^2+(conv_horiz)^2)^(1/2)
+
+#image(G1, col = gray.colors(256), axes = F)
+image(G2, col = gray.colors(256), axes = F)
+
+```
+
+```{r}
+# Gaussian blur
+sigma = 3
+inp=rep(seq(-7,7, 1),15) #creating input for the Gaussian filter
+
+x=matrix(inp, byrow = T, ncol = 15, nrow=15)
+y=matrix(inp, byrow = F, ncol = 15, nrow=15)
+
+gs = exp(- (x^2+y^2)/(2*sigma^2))
+
+gb=gs/sum(gs) # normalise the ouput
+
+# Apply the filter to the image
+blur=convolution2D(ascent, gb)
+image_gb=image(blur, col = gray.colors(256), axes = F)
+```
+
+#### Problem 4 - Fit convolutional neural networks to CIFAR
+
+In this problem you will work with the CIFAR10 data, a dataset with 28x28 RGB color images
+from 10 labeled classes. The following code loads the data, scales it and plots one of
+the images.
+
+```{r }
+# See ?dataset_cifar10 for more info
+cifar10 <- dataset_cifar10()
+classes = c('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+y_label_train = classes[cifar10$train$y+1]
+y_label_test = classes[cifar10$test$y+1]
+
+# Scale RGB values in test and train inputs  
+x_train <- cifar10$train$x/255   # x_train[1,,,1] is the red channel for first pic
+x_test <- cifar10$test$x/255
+
+y_train <- to_categorical(cifar10$train$y, num_classes = 10)
+y_test <- to_categorical(cifar10$test$y, num_classes = 10)
+
+# Let's only use 10000 of the 50000 images for training. Runs faster.
+x_train <- x_train[1:10000,,,]
+y_train <- y_train[1:10000,]
+
+y_label_train <- y_label_train[1:10000] 
+
+
+# Plot an image and check if the label is correct
+image_no = 20
+rgbimage <- rgb(x_train[image_no,,,1], x_train[image_no,,,2], x_train[image_no,,,3])
+dim(rgbimage) <- dim(x_train[image_no,,,1])
+y_label_train[image_no]
+library(grid)
+grid.newpage()
+grid.raster(rgbimage, interpolate=FALSE)
+```
+
+```{r }
+
+model <- keras_model_sequential() %>%
+  
+  # First layer and input data
+  layer_conv_2d(
+    filter = 32, kernel_size = c(3, 3), padding = "same",
+           activation = "relu",input_shape = c(32, 32, 3)) %>%
+          
+    layer_max_pooling_2d(pool_size = c(2, 2)) %>%  
+    layer_dropout(rate = 0.25) %>% 
+  
+  # Second hidden layer
+  layer_conv_2d(
+    filter = 64, kernel_size = c(3, 3), activation = "relu")%>%
+        
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_dropout(rate = 0.25) %>% 
+  
+  # Third hidden layer
+  layer_conv_2d(filter = 64, kernel_size = c(3,3), padding = "same",
+               activation = "relu") %>%
+  
+  layer_max_pooling_2d(pool_size = c(2,2)) %>%
+  layer_dropout(0.5) %>%
+  
+  # Dense layer
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = "relu") %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 480, activation = "relu") %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 320, activation = "relu") %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 10, activation = "softmax")
+
+model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = "adam",
+  metrics = c('accuracy')
+)
+```
+
+```{r }
+
+model %>% fit(x_train, y_train,
+  batch_size = 64,
+  epochs = 150,
+  validation_split = 0.2)
+
+```
+
+```{r}
+# Confusion matrix
+# Test Performance
+eval <- model %>% evaluate(x_test, y_test)
+
+cat('Test loss:', round((eval[1]),4), "\n")
+cat('Test accuracy:', eval[2], "\n")
+```
+
+Compute the confusion matrix on the test data. Which classes are most easily mistaken by  the classifier?
+
+```{r}
+
+# Confusion matrix
+
+yProbs <- model %>% predict(x_test) # Predictions on the test data
+yPreds = apply(yProbs, 1, function(x) which.max(x)-1)
+
+yPreds_labels = classes[yPreds+1] #assign labels to predictions
+
+yPreds_labels=as.factor(yPreds_labels)
+length(yPreds_labels)
+str(yPreds_labels)
+
+y_label_test=as.factor(y_label_test)
+length(y_label_test)
+str(y_label_test)
+
+
+confusionMatrix(yPreds_labels, y_label_test)
+
+# The classes that are easily mistaken by the classfier are:
+# cats and dogs
+# birds and deers
+# deers and horses
+# planes and ships
+
+```
+
+
+#### Problem 5 - Gaussian process regression for the bike share data
+
+This problem will fit a Gaussian process regression model to the bike share data from Lab 1a. 
+We will be using only February of 2011 for training, and only the variable `hour` as predictor 
+for `logrides`. Let's load the data and get started:
+```{r read-bike-share-data}
+bikes = read.csv("https://github.com/mattiasvillani/MLcourse/raw/main/Data/BikeShareData/hour.csv")
+bikes$dteday = as.Date(bikes$dteday) # convert date column to proper date format
+bikes$logrides = log(bikes$cnt)      # we model the log(number of rides) as response.
+bikes$hour = bikes$hr/23             # hour of the day. midnight is 0, 11 PM is 1.
+bikesTrain = bikes[bikes$dteday >= as.Date("2011-02-01") & 
+                     bikes$dteday <= as.Date("2011-02-28"),] # Data from feb 2011
+dim(bikesTrain)
+
+```
+
+Consider now the Gaussian process regression:
+
+$$y = f(x) + \varepsilon, \hspace{0.5cm} \varepsilon \sim N(0,\sigma_n^2),$$
+where $y$ are the observed `logrides` and $x$ is the observed `hour`. 
+Fit a Gaussian process regression to the bike share data from February in 2011, using 
+the squared exponential kernel. The noise standard deviation in the Gaussian process 
+regression, $\sigma_n$, can be set equal to the estimated residual variance from a 
+polynomial fit of degree 3. Use a zero (prior) mean for the function $f(x)$.
+
+I want you to code everything from scratch. This involves coding:
+
+- The squared exponential kernel function $k(x,x')$ for any two inputs $x$ and $x'$.
+- A function that evaluates the kernel function $k(x,x')$ over a dataset with $n$ data points 
+and returns the $n \times n$ covariance matrix $K(\mathbf{x},\mathbf{x}')$.
+- A function that computes the mean and standard deviation of the function $f$ for a test 
+set $\mathbf{x}_\star$ of input values.
+
+The end result in your report should be a scatter plot of the data with the mean of 
+$f$ overlayed, as well as 95% probability bands for $f$. Note that this involves predicting 
+on a test set with `hour` on a fine grid of values, e.g. `hourGrid = seq(0, 1, length = 1000)`.
+
+The squared exponential kernel has two hyperparameters $\ell$ and $\sigma_f$. Experiment 
+with different values and report your results for a set of values that seems to fit the data
+well and gives you a smoothing that you find pleasing to the eye. In practice one would 
+estimate these hyperparameters, for example by maximizing the log marginal likelihood, but
+I do not require that here.
+
+```{r}
+# Response, predictor and test variables
+y=matrix(bikesTrain$logrides,ncol=1) #response
+x=as.matrix(bikesTrain$hour, ncol=1) #predictor
+x.star=matrix(seq(0,1, length=1000)) #test
+
+# Estimation of the residual variance 
+poly_8 <- lm(y ~ poly(x,3, raw = TRUE)) 
+sigma=summary(poly_8)[6] #residual standard error
+variance=0.8965041^2 #residual variance
+variance
+```
+
+```{r}
+# The squared exponential kernel function $k(x,x')$ for any two inputs.
+
+exp_foo <- function(x, x.star, scale, l){
+  sigma^2 * exp(-(x-x.star)^2/(2*l^2))
+}
+
+# Function to compute the exponential kernel
+ 
+exp_kernel=function(scale,l, x, x.star){
+    
+    cov <- matrix(data =NA, nrow=nrow(x.star), ncol=nrow(x))
+
+      for(i in 1:nrow(x.star)){
+        for(j in 1:nrow(x)){
+      
+        cov[i,j] =scale^2 * exp(-0.5*(x.star[i]-x[j])^2/l^2)
+        }
+      }
+    return(cov)
+ }
+
+```
+
+```{r}
+# Sanity check
+
+k.XX=exp_kernel(5,0.3, x, x)
+dim(k.XX) #649, 649
+
+k.XSXS=exp_kernel(5,0.3, x.star, x.star)
+dim(k.XSXS) #1000, 1000
+
+k.XXS=exp_kernel(5,0.3, x, x.star)
+dim(k.XXS) #1000, 649
+```
+
+
+```{r}
+# Function to estimate the posterior mean vector and cov.matrix
+pred_foo=function(x, x.star, y, scale, l, variance) {
+    
+    I<-diag(nrow(x))
+    K.XX <- exp_kernel(scale,l, x,x)
+    K.XSXS <- exp_kernel(scale,l, x.star, x.star)
+    K.XXS <- exp_kernel(scale,l, x, x.star)
+    
+    Sigma=solve(K.XX+variance*I)
+    
+    mean_vect <- K.XXS %*% Sigma %*% y
+    cov_matrix <- K.XSXS - K.XXS %*% Sigma %*% t(K.XXS)
+    
+    return(list(mean_vect, cov_matrix))
+ }
+
+```
+
+```{r}
+# Function to produce the plot
+plot=function(x.star, mu, cov, x, y ){
+
+yPreds <- rmvnorm(30, mu, cov)
+q1 <- mu + qnorm(0.025, 0, sqrt(diag(cov)))
+q2 <- mu + qnorm(0.975, 0, sqrt(diag(cov)))
+
+matplot(x.star, t(yPreds), type="l", lty=3, xlab="x", ylab="y", ylim=c(0,max(y))) #predictions
+points(x, y, pch=20, cex=1) #actual observations
+lines(x.star, mu, lwd=3, col=4)
+lines(x.star, q1, lwd=2, lty=2, col=2)
+lines(x.star, q2, lwd=2, lty=2, col=2)
+
+}
+
+```
+
+
+```{r}
+# The MLE estimation of the scale and length parameters
+
+# Length
+nl <- function(l, X, Y, variance) 
+ {
+  n <- length(Y)
+  Sigma <- exp_kernel(scale=1,l,X,X) + diag(variance, n)
+  SigmaInv <-solve(Sigma)
+  ldetK <- determinant(Sigma, logarithm=TRUE)$modulus
+  ll <- - (n/2)*log(t(Y) %*% SigmaInv %*% Y) - (1/2)*ldetK
+  counter <<- counter + 1
+  return(-ll)
+ }
+
+counter <- 0
+l <- optimize(nl, interval=c(0.01, 3), X=x, Y=y, variance=variance)$minimum
+l
+
+# Compute MLE for scale
+
+Sigma=solve(exp_kernel(scale=1,l,x,x) + diag(variance, length(y)))
+scale_sq=drop((t(y)%*%Sigma%*%y)/length(y))
+scale_sq
+scale=scale_sq^0.5; scale
+```
+
+```{r}
+
+# Estimation of the posterior mean and covariance
+result=pred_foo(x=x, x.star=x.star, y=y, scale=scale, l=l, variance=variance)
+
+mu=matrix(unlist(result[1]))
+names(mu)="mu"
+
+cov.mat=data.frame((result[2]))
+cov.mat=as.matrix(cov.mat)
+```
+
+```{r}
+
+# The final scatter plot 
+gb_plot=plot(x.star, mu, cov.mat, x, y)
+legend("bottomright", legend=c("Mean of f", "95% bands", "Predictions"),
+       col=c("blue", "red", "green"), lty=1:2, cex=0.7)
+
+```
+
+
